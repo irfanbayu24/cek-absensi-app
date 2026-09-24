@@ -219,8 +219,9 @@ if menu == "🏠 Beranda (Cek Absen)":
 elif menu == "🔄 Convert Data":
   st.title("🔄 Menu Konversi & Pilih Kolom Export")
   st.markdown(
-      "Gunakan menu ini untuk merapikan file Excel, membersihkan gelar pada"
-      " nama, serta memilih kolom apa saja yang ingin disimpan ke file baru."
+      "Gunakan menu ini untuk merapikan file Excel, membersihkan NIP/tanda petik"
+      " (') pada data, membersihkan gelar pada nama, serta memilih kolom apa"
+      " saja yang ingin disimpan ke file baru."
   )
   st.markdown("---")
 
@@ -242,16 +243,20 @@ elif menu == "🔄 Convert Data":
           "Pilih tindakan konversi (Opsional):",
           [
               "-- Tanpa Konversi (Hanya Pilih Kolom) --",
+              "Merapihkan angka pada NIP Absen (Hapus tanda petik/spasi)",
               "Hapus Gelar pada Kolom Nama",
           ],
       )
 
       kolom_target = None
       if opsi_konversi != "-- Tanpa Konversi (Hanya Pilih Kolom) --":
-        kolom_target = st.selectbox(
-            "Pilih kolom nama yang ingin dibersihkan gelarnya:",
-            df_conv.columns.tolist(),
+        # Menyesuaikan label selectbox berdasarkan pilihan konversi
+        label_text = (
+            "Pilih kolom NIP yang ingin dirapikan:"
+            if "NIP" in opsi_konversi
+            else "Pilih kolom nama yang ingin dibersihkan gelarnya:"
         )
+        kolom_target = st.selectbox(label_text, df_conv.columns.tolist())
 
       st.markdown("---")
       st.subheader("📋 Pilih Kolom yang Ingin Diexport")
@@ -276,7 +281,23 @@ elif menu == "🔄 Convert Data":
               opsi_konversi != "-- Tanpa Konversi (Hanya Pilih Kolom) --"
               and kolom_target
           ):
-            if opsi_konversi == "Hapus Gelar pada Kolom Nama":
+            # 1. Logika Merapikan NIP (Menghapus tanda petik ', spasi, atau karakter non-digit)
+            if "NIP" in opsi_konversi:
+
+              def clean_nip_data(val):
+                if pd.isna(val):
+                  return val
+                # Mengubah ke string, lalu menghapus tanda petik dan karakter non-digit (atau ambil angkanya saja)
+                text = str(val).replace("'", "").replace('"', "")
+                # Jika ingin murni angka saja:
+                return re.sub(r"\D", "", text)
+
+              df_hasil[kolom_target] = df_hasil[kolom_target].apply(
+                  clean_nip_data
+              )
+
+            # 2. Logika Menghapus Gelar pada Nama
+            elif opsi_konversi == "Hapus Gelar pada Kolom Nama":
 
               def remove_titles_and_clean(val):
                 if pd.isna(val):
