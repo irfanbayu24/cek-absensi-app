@@ -1,25 +1,115 @@
 import io
 import re
+import time
 import pandas as pd
+import requests
+import schedule
 import streamlit as st
+from streamlit_option_menu import option_menu
 
-# Konfigurasi halaman Streamlit
+# ==========================================
+# FUNGSI HELPER / PENDUKUNG
+# ==========================================
+
+
+def remove_titles_and_clean(val):
+  """Membersihkan gelar akademik/kehormatan dan merapikan format nama."""
+  if pd.isna(val):
+    return ""
+  text = str(val)
+  text = re.sub(r"[,;\/].*", "", text)
+  titles_pattern = r"\b(S\.Kom|M\.Kom|S\.E|S\.H|S\.T|M\.T|S\.Pd|M\.Pd|Dr|Ir|H\.|Hj\.)\.?"
+  
+  # PERBAIKAN DI SINI (menggunakan re.IGNORECASE secara langsung)
+  text = re.sub(titles_pattern, "", text, flags=re.IGNORECASE)
+  
+  text = re.sub(r"[\.,]+$", "", text)
+  text = text.strip()
+  text = " ".join(text.split())
+  return text.title()
+
+
+def check_partial_words(str1, str2):
+  """Pencocokan fleksibel berbasis kata antara dua string."""
+  words1 = set(str1.split())
+  words2 = set(str2.split())
+  if not words1 or not words2:
+    return False
+  common = words1.intersection(words2)
+  if len(words1) <= 2 or len(words2) <= 2:
+    return len(common) >= min(len(words1), len(words2))
+  else:
+    return len(common) >= 2
+
+
+def convert_df_to_excel(df, sheet_name="Sheet1"):
+  output = io.BytesIO()
+  with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    df.to_excel(writer, index=False, sheet_name=sheet_name)
+  return output.getvalue()
+
+
+def clean_nip_data(val):
+  if pd.isna(val):
+    return val
+  text = str(val).replace("'", "").replace('"', "")
+  return re.sub(r"\D", "", text)
+
+
+# Fungsi untuk mengirim pesan WhatsApp via API Fonnte
+def kirim_wa_fonnte(token_api, target_tujuan, pesan):
+  url = "https://api.fonnte.com/send"
+  payload = {"target": target_tujuan, "message": pesan, "country": "62"}
+  headers = {"Authorization": token_api}
+  try:
+    response = requests.post(url, data=payload, headers=headers)
+    return response.json()
+  except Exception as e:
+    return {"status": False, "reason": str(e)}
+
+
+# ==========================================
+# KONFIGURASI HALAMAN STREAMLIT
+# ==========================================
 st.set_page_config(
-    page_title="Aplikasi Absensi Karyawan", page_icon="📊", layout="wide"
+    page_title="Aplikasi Absensi Karyawan & Reminder",
+    page_icon="📊",
+    layout="wide",
 )
 
 # ==========================================
 # NAVIGASI SIDEBAR
 # ==========================================
-st.sidebar.title("📌 Menu Navigasi")
-menu = st.sidebar.radio(
-    "Pilih Menu:", ["🏠 Beranda (Cek Absen)", "🔄 Convert Data"]
-)
+with st.sidebar:
+  menu = option_menu(
+      menu_title="Main Menu",
+      options=[
+          "Beranda (Cek Absen)",
+          "Convert Data",
+          "WhatsApp Reminder",
+          "Author",
+      ],
+      icons=["house-door", "arrow-repeat", "whatsapp", "person-badge"],
+      menu_icon="tv",
+      default_index=0,
+      styles={
+          "container": {"padding": "0!important", "background-color": "transparent"},
+          "icon": {"color": "white", "font-size": "18px"},
+          "nav-link": {
+              "font-size": "15px",
+              "text-align": "left",
+              "margin": "0px",
+              "color": "white",
+              "--hover-color": "rgba(255, 255, 255, 0.1)",
+          },
+          "nav-link-selected": {"background-color": "#ff4b4b"},
+      },
+  )
 
 # ==========================================
 # MENU 1: BERANDA (CEK ABSEN)
 # ==========================================
-if menu == "🏠 Beranda (Cek Absen)":
+if menu == "Beranda (Cek Absen)":
   st.title("👤 Daftar Karyawan Belum Absen")
   st.markdown(
       "Aplikasi membandingkan kehadiran berdasarkan **Nama** dengan pembersih"
@@ -27,8 +117,6 @@ if menu == "🏠 Beranda (Cek Absen)":
   )
   st.markdown("---")
 
-  # Area Upload File di tengah (halaman utama)
-  st.subheader("📁 Upload File Excel")
   col_up1, col_up2 = st.columns(2)
   with col_up1:
     master_file = st.file_uploader(
@@ -41,13 +129,10 @@ if menu == "🏠 Beranda (Cek Absen)":
 
   if master_file and rekap_file:
     try:
-      # Membaca file Excel
       df_master = pd.read_excel(master_file)
       df_rekap = pd.read_excel(rekap_file)
-
       st.success("File berhasil diunggah!")
 
-      # Pengaturan Kolom Pencocokan Nama
       st.markdown("---")
       st.subheader("⚙️ Pilih Kolom Nama untuk Pencocokan Data")
       master_cols = df_master.columns.tolist()
@@ -67,55 +152,17 @@ if menu == "🏠 Beranda (Cek Absen)":
             index=0 if "Nama" in rekap_cols else 0,
         )
 
-      # FUNGSI PEMBERSIH GELAR & FORMAT NAMA YANG KUAT
-      def remove_titles_and_clean(val):
-        if pd.isna(val):
-          return ""
-        text = str(val)
-
-        # 1. Hapus gelar di belakang koma, titik koma, atau garis miring (contoh: "Budi, S.Kom" atau "Budi/S.T")
-        text = re.sub(r"[,;\/].*", "", text)
-
-        # 2. Daftar singkatan gelar lengkap yang sering muncul di depan/belakang nama
-        titles_pattern = r"\b(dr|drg|prof|ir|h|hj|dra|drs|se|sh|skom|mkom|mm|mpd|spd|si|st|mt|mh|msc|bsc|ba|ama|ak|S\.Kom|M\.Kom|S\.E|S\.H|S\.T|M\.T|S\.Pd|M\.Pd|Dr|Ir|H\.|Hj\.)\.?"
-        text = re.sub(titles_pattern, "", text, flags=re.IGNORECASE)
-
-        # 3. Bersihkan sisa titik/tanda baca berlebih di ujung nama
-        text = re.sub(r"[\.,]+$", "", text)
-
-        # 4. Rapikan spasi
-        text = text.strip()
-        text = " ".join(text.split())
-        return text.title()
-
-      # Buat salinan dataframe master
       df_processed = df_master.copy()
-
-      # Bersihkan nama utama di master (tanpa gelar)
       df_processed["Nama_Bersih"] = df_processed[key_master].apply(
           remove_titles_and_clean
       )
 
       with st.spinner("Sedang memproses dan mencocokkan data..."):
-        # Bersihkan list nama hadir untuk dicocokkan
         list_hadir_bersih = [
             remove_titles_and_clean(x).lower()
             for x in df_rekap[key_rekap].dropna().unique()
         ]
-
         df_processed["_key_clean"] = df_processed["Nama_Bersih"].str.lower()
-
-        # Fungsi pencocokan fleksibel berbasis kata
-        def check_partial_words(str1, str2):
-          words1 = set(str1.split())
-          words2 = set(str2.split())
-          if not words1 or not words2:
-            return False
-          common = words1.intersection(words2)
-          if len(words1) <= 2 or len(words2) <= 2:
-            return len(common) >= min(len(words1), len(words2))
-          else:
-            return len(common) >= 2  # Minimal 2 kata yang sama
 
         def cek_kehadiran(cleaned_master):
           if not cleaned_master:
@@ -133,15 +180,11 @@ if menu == "🏠 Beranda (Cek Absen)":
             cek_kehadiran
         )
 
-      # Filter hanya karyawan yang belum absen
       df_tidak_hadir = df_processed[
           df_processed["Sudah_Absen"] == False
       ].copy()
-
-      # Ganti kolom nama asli dengan nama bersih tanpa gelar secara permanen di output
       df_tidak_hadir[key_master] = df_tidak_hadir["Nama_Bersih"]
 
-      # Buang kolom bantu sementara
       cols_to_drop = [
           col
           for col in ["Sudah_Absen", "Nama_Bersih", "_key_clean"]
@@ -151,14 +194,12 @@ if menu == "🏠 Beranda (Cek Absen)":
 
       st.markdown("---")
       st.header("🔍 Filter Berdasarkan Unit / Departemen")
-
-      # Deteksi kolom unit secara otomatis
       unit_cols = [
           col
           for col in df_master.columns
-          if "unit" in col.lower()
-          or "departemen" in col.lower()
-          or "bagian" in col.lower()
+          if any(
+              keyword in col.lower() for keyword in ["unit", "departemen", "bagian"]
+          )
       ]
 
       if unit_cols:
@@ -166,16 +207,14 @@ if menu == "🏠 Beranda (Cek Absen)":
             "Pilih Unit / Departemen:",
             ["Semua Unit"] + list(df_tidak_hadir[unit_cols[0]].dropna().unique()),
         )
-        if selected_unit != "Semua Unit":
-          df_tampil = df_tidak_hadir[
-              df_tidak_hadir[unit_cols[0]] == selected_unit
-          ]
-        else:
-          df_tampil = df_tidak_hadir
+        df_tampil = (
+            df_tidak_hadir
+            if selected_unit == "Semua Unit"
+            else df_tidak_hadir[df_tidak_hadir[unit_cols[0]] == selected_unit]
+        )
       else:
         df_tampil = df_tidak_hadir
 
-      # Tampilkan Ringkasan Jumlah
       st.metric(
           "Total Karyawan Belum Absen",
           f"{len(df_tampil)} Orang (dari {len(df_master)} Total Karyawan)",
@@ -184,16 +223,7 @@ if menu == "🏠 Beranda (Cek Absen)":
       st.markdown("### Daftar Karyawan yang Belum Absen (Tanpa Gelar):")
       if len(df_tampil) > 0:
         st.dataframe(df_tampil, use_container_width=True)
-
-        # Tombol Download Excel (.xlsx) dengan nama bersih tanpa gelar
-        def convert_df_to_excel(df):
-          output = io.BytesIO()
-          with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Belum_Absen")
-          return output.getvalue()
-
-        excel_data = convert_df_to_excel(df_tampil)
-
+        excel_data = convert_df_to_excel(df_tampil, sheet_name="Belum_Absen")
         st.download_button(
             label="📥 Download Daftar Belum Absen (Format Excel .xlsx)",
             data=excel_data,
@@ -216,13 +246,9 @@ if menu == "🏠 Beranda (Cek Absen)":
 # ==========================================
 # MENU 2: CONVERT DATA
 # ==========================================
-elif menu == "🔄 Convert Data":
+elif menu == "Convert Data":
   st.title("🔄 Menu Konversi & Pilih Kolom Export")
-  st.markdown(
-      "Gunakan menu ini untuk merapikan file Excel, membersihkan NIP/tanda petik"
-      " (') pada data, membersihkan gelar pada nama, serta memilih kolom apa"
-      " saja yang ingin disimpan ke file baru."
-  )
+  st.markdown("Gunakan menu ini untuk merapikan file Excel dan data NIP.")
   st.markdown("---")
 
   convert_file = st.file_uploader(
@@ -236,9 +262,6 @@ elif menu == "🔄 Convert Data":
       st.subheader("Preview Data Asli")
       st.dataframe(df_conv.head(5), use_container_width=True)
 
-      st.markdown("---")
-      st.subheader("⚙️ Pengaturan Konversi")
-
       opsi_konversi = st.selectbox(
           "Pilih tindakan konversi (Opsional):",
           [
@@ -250,20 +273,12 @@ elif menu == "🔄 Convert Data":
 
       kolom_target = None
       if opsi_konversi != "-- Tanpa Konversi (Hanya Pilih Kolom) --":
-        # Menyesuaikan label selectbox berdasarkan pilihan konversi
         label_text = (
             "Pilih kolom NIP yang ingin dirapikan:"
             if "NIP" in opsi_konversi
             else "Pilih kolom nama yang ingin dibersihkan gelarnya:"
         )
         kolom_target = st.selectbox(label_text, df_conv.columns.tolist())
-
-      st.markdown("---")
-      st.subheader("📋 Pilih Kolom yang Ingin Diexport")
-      st.markdown(
-          "Centang kolom-kolom di bawah ini yang ingin Anda masukkan ke dalam"
-          " file Excel hasil download:"
-      )
 
       kolom_terpilih = st.multiselect(
           "Daftar Kolom:",
@@ -276,55 +291,21 @@ elif menu == "🔄 Convert Data":
           st.warning("⚠️ Harap pilih minimal 1 kolom untuk di-export!")
         else:
           df_hasil = df_conv.copy()
-
           if (
               opsi_konversi != "-- Tanpa Konversi (Hanya Pilih Kolom) --"
               and kolom_target
           ):
-            # 1. Logika Merapikan NIP (Menghapus tanda petik ', spasi, atau karakter non-digit)
             if "NIP" in opsi_konversi:
-
-              def clean_nip_data(val):
-                if pd.isna(val):
-                  return val
-                # Mengubah ke string, lalu menghapus tanda petik dan karakter non-digit (atau ambil angkanya saja)
-                text = str(val).replace("'", "").replace('"', "")
-                # Jika ingin murni angka saja:
-                return re.sub(r"\D", "", text)
-
               df_hasil[kolom_target] = df_hasil[kolom_target].apply(
                   clean_nip_data
               )
-
-            # 2. Logika Menghapus Gelar pada Nama
             elif opsi_konversi == "Hapus Gelar pada Kolom Nama":
-
-              def remove_titles_and_clean(val):
-                if pd.isna(val):
-                  return val
-                text = str(val)
-                text = re.sub(r"[,;\/].*", "", text)
-                titles_pattern = r"\b(S\.Kom|M\.Kom|S\.E|S\.H|S\.T|M\.T|S\.Pd|M\.Pd|Dr|Ir|H\.|Hj\.)\.?"
-                text = re.sub(titles_pattern, "", text, flags=re.IGNORECASE)
-                text = re.sub(r"[\.,]+$", "", text)
-                text = text.strip()
-                text = " ".join(text.split())
-                return text.title()
-
               df_hasil[kolom_target] = df_hasil[kolom_target].apply(
                   remove_titles_and_clean
               )
 
           df_final_export = df_hasil[kolom_terpilih]
-
-          st.success("Konversi dan pemilihan kolom berhasil!")
-          st.subheader("Preview Hasil Akhir:")
-          st.dataframe(df_final_export.head(5), use_container_width=True)
-
-          output = io.BytesIO()
-          with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            df_final_export.to_excel(writer, index=False, sheet_name="Export_Data")
-          excel_data = output.getvalue()
+          excel_data = convert_df_to_excel(df_final_export, sheet_name="Export_Data")
 
           st.download_button(
               label="📥 Download File Excel yang Dipilih (.xlsx)",
@@ -334,6 +315,101 @@ elif menu == "🔄 Convert Data":
                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               ),
           )
-
     except Exception as e:
       st.error(f"Terjadi kesalahan: {e}")
+
+# ==========================================
+# MENU 3: WHATSAPP REMINDER (BARU)
+# ==========================================
+elif menu == "WhatsApp Reminder":
+  st.title("⏰ Konfigurasi Pengingat Absensi WhatsApp")
+  st.markdown(
+      "Atur jadwal otomatis dan token API WhatsApp Gateway (contoh menggunakan"
+      " **Fonnte**) untuk pengingat MagangHub."
+  )
+  st.markdown("---")
+
+  with st.form("form_wa_setting"):
+    st.subheader("🔑 Kredensial API & Tujuan")
+    api_token = st.text_input(
+        "Fonnte API Token:",
+        type="password",
+        placeholder="Masukkan token API Fonnte Anda di sini",
+    )
+    target_wa = st.text_input(
+        "Nomor Tujuan / ID Grup WhatsApp:",
+        placeholder="Contoh: 628123456789 atau ID Grup WhatsApp",
+    )
+
+    st.subheader("🕒 Pengaturan Waktu & Pesan")
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+      jam_kirim = st.time_input("Jam Pengiriman Harian:")
+    with col_t2:
+      status_aktif = st.checkbox("Aktifkan Pengingat Otomatis", value=False)
+
+    pesan_default = (
+        "Halo rekan-rekan MagangHub, diingatkan untuk segera melakukan absensi"
+        " hari ini ya! Terima kasih. 🙏"
+    )
+    pesan_template = st.text_area("Template Pesan Pengingat:", value=pesan_default)
+
+    submitted = st.form_submit_button("Simpan Pengaturan Reminder")
+
+    if submitted:
+      # Menyimpan konfigurasi ke Session State Streamlit
+      st.session_state["wa_token"] = api_token
+      st.session_state["wa_target"] = target_wa
+      st.session_state["wa_jam"] = str(jam_kirim)
+      st.session_state["wa_status"] = status_aktif
+      st.success("✅ Pengaturan pengingat WhatsApp berhasil disimpan!")
+
+  st.markdown("---")
+  st.subheader("🧪 Uji Coba Kirim Pesan Manual")
+  st.markdown(
+      "Gunakan tombol di bawah ini untuk menguji apakah koneksi API WhatsApp"
+      " Anda berfungsi dengan baik."
+  )
+
+  if st.button("🚀 Kirim Test Pesan Sekarang"):
+    token_tersimpan = st.session_state.get("wa_token", "")
+    target_tersimpan = st.session_state.get("wa_target", "")
+
+    if not token_tersimpan or not target_tersimpan:
+      st.warning(
+          "⚠️ Harap isi dan simpan Token API serta Nomor Tujuan terlebih dahulu"
+          " di form atas!"
+      )
+    else:
+      with st.spinner("Mengirim pesan uji coba ke WhatsApp..."):
+        hasil = kirim_wa_fonnte(
+            token_tersimpan,
+            target_tersimpan,
+            "TEST MESSAGE: Bot Pengingat Absensi MagangHub aktif!",
+        )
+        if hasil.get("status") or hasil.get("true"):
+          st.success("🎉 Pesan uji coba berhasil dikirim ke WhatsApp!")
+        else:
+          st.error(f"❌ Gagal mengirim pesan. Keterangan: {hasil}")
+
+# ==========================================
+# MENU 4: AUTHOR
+# ==========================================
+elif menu == "Author":
+  st.title("👨‍💻 Tentang Author")
+  st.markdown("Informasi mengenai pengembang aplikasi ini.")
+  st.markdown("---")
+
+  st.info(
+      "Aplikasi **Aplikasi Absensi Karyawan** ini dikembangkan secara mandiri"
+      " untuk memudahkan proses pengecekan rekapitulasi absensi."
+  )
+
+  st.markdown("### 📌 Detail Author")
+  st.markdown("- **Nama:** Irfan Bayu Seno")
+  st.markdown("- **No. Telepon / WhatsApp:** 087775762410")
+  st.markdown(
+      "- **LinkedIn:**"
+      " [Irfan Bayu"
+      " Seno](https://www.linkedin.com/in/irfan-bayu-seno)"
+  )
