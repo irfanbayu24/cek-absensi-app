@@ -3,6 +3,7 @@
 Aplikasi berbasis web interaktif yang dibangun menggunakan **Streamlit** untuk mempermudah proses pengecekan kehadiran karyawan/peserta magang (MagangHub) secara otomatis berdasarkan pencocokan nama dan pembersihan gelar akademik. Dilengkapi juga dengan menu konversi data Excel serta fitur pengingat otomatis via **WhatsApp Gateway (Fonnte)**.
 
 ✨ Fitur Utama
+
 🏠 Beranda (Cek Absen):
 
 Upload file Master Karyawan dan Rekap Absen (.xlsx / .xls).
