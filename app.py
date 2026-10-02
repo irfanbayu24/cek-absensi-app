@@ -53,22 +53,6 @@ def clean_nip_data(val):
   return re.sub(r"\D", "", text)
 
 
-def filter_berdasarkan_status(df_master, kolom_status="Status"):
-  """Logika mendeteksi dan memfilter status karyawan/magang (Aktif/Cuti/Tugas Belajar)"""
-  if kolom_status in df_master.columns:
-    df_master["_status_clean"] = (
-        df_master[kolom_status].astype(str).str.lower().str.strip()
-    )
-    # Status yang dikecualikan dari kewajiban absen
-    status_pengecualian = ["cuti", "tugas belajar", "izin"]
-    df_aktif = df_master[
-        ~df_master["_status_clean"].isin(status_pengecualian)
-    ].copy()
-    df_aktif = df_aktif.drop(columns=["_status_clean"])
-    return df_aktif
-  return df_master
-
-
 # ==========================================
 # KONFIGURASI HALAMAN STREAMLIT
 # ==========================================
@@ -77,7 +61,7 @@ st.set_page_config(
 )
 
 # ==========================================
-# NAVIGASI SIDEBAR (Tanpa WhatsApp Reminder)
+# NAVIGASI SIDEBAR
 # ==========================================
 with st.sidebar:
   menu = option_menu(
@@ -106,7 +90,7 @@ with st.sidebar:
 if menu == "Beranda (Cek Absen)":
   st.title("👤 Daftar Karyawan Belum Absen")
   st.markdown(
-      "Aplikasi membandingkan kehadiran berdasarkan **kolom yang ditentukan** dengan pembersih"
+      "Aplikasi membandingkan kehadiran berdasarkan **Nama** dengan pembersih"
       " gelar otomatis serta filter status kepegawaian."
   )
   st.markdown("---")
@@ -132,20 +116,61 @@ if menu == "Beranda (Cek Absen)":
       status_cols = [
           col
           for col in df_master.columns
-          if "status" in col.lower() or "keterangan" in col.lower()
+          if any(
+              keyword in col.lower()
+              for keyword in ["status", "keterangan", "keaktifan"]
+          )
       ]
+
+      st.markdown("---")
+      st.subheader("⚙️ Pengaturan Filter Status Pegawai")
+
+      df_master_filtered = df_master.copy()
+
       if status_cols:
         col_status = status_cols[0]
         st.info(
-            f"ℹ️ Sistem mendeteksi kolom status kepegawaian pada:"
-            f" **{col_status}** (Pegawai Cuti/Tugas Belajar akan otomatis"
-            " dilewati)."
+            f"ℹ️ Sistem mendeteksi kolom status kepegawaian pada: **{col_status}**"
         )
-        df_master = filter_berdasarkan_status(df_master, kolom_status=col_status)
+
+        # Checkbox interaktif untuk menyembunyikan pegawai Non Aktif
+        abaikan_nonaktif = st.checkbox(
+            "Kecualikan / Sembunyikan Pegawai dengan Status 'Non Aktif'",
+            value=True,
+        )
+
+        if abaikan_nonaktif:
+          df_master_filtered["_status_clean"] = (
+              df_master_filtered[col_status]
+              .astype(str)
+              .str.lower()
+              .str.strip()
+          )
+          # Menggunakan str.contains untuk menangkap teks seperti "Non Aktif (Tugas Belajar)"
+          df_master_filtered = df_master_filtered[
+              ~df_master_filtered["_status_clean"].str.contains(
+                  "non aktif|non-aktif|nonaktif", na=False
+              )
+          ].copy()
+          df_master_filtered = df_master_filtered.drop(
+              columns=["_status_clean"]
+          )
+
+          jumlah_dilewati = len(df_master) - len(df_master_filtered)
+          if jumlah_dilewati > 0:
+            st.warning(
+                f"⚠️ Sebanyak {jumlah_dilewati} pegawai dengan status 'Non"
+                " Aktif' berhasil disembunyikan dari daftar absen."
+            )
+      else:
+        st.warning(
+            "⚠️ Tidak ditemukan kolom 'Status' di file Excel Master. Semua"
+            " baris akan diproses."
+        )
 
       st.markdown("---")
       st.subheader("⚙️ Pilih Kolom Nama untuk Pencocokan Data")
-      master_cols = df_master.columns.tolist()
+      master_cols = df_master_filtered.columns.tolist()
       rekap_cols = df_rekap.columns.tolist()
 
       cc3, cc4 = st.columns(2)
@@ -164,9 +189,9 @@ if menu == "Beranda (Cek Absen)":
             key="key_rekap_select",
         )
 
-      if st.button("Proses Pengecekan Absen", key="btn_proses_absen"):
+      if st.button("🚀 Proses Pengecekan Absen", key="btn_proses_absen"):
         with st.spinner("Sedang memproses dan mencocokkan data..."):
-          df_processed = df_master.copy()
+          df_processed = df_master_filtered.copy()
           df_processed["Nama_Bersih"] = df_processed[key_master].apply(
               remove_titles_and_clean
           )
@@ -206,7 +231,7 @@ if menu == "Beranda (Cek Absen)":
           df_tidak_hadir = df_tidak_hadir.drop(columns=cols_to_drop)
 
           st.session_state["df_tidak_hadir"] = df_tidak_hadir
-          st.session_state["df_master_len"] = len(df_master)
+          st.session_state["df_master_len"] = len(df_master_filtered)
           st.session_state["key_master_col"] = key_master
           st.success("✅ Data berhasil diproses!")
 
@@ -218,7 +243,7 @@ if menu == "Beranda (Cek Absen)":
 
         unit_cols = [
             col
-            for col in df_master.columns
+            for col in df_master_filtered.columns
             if any(
                 keyword in col.lower()
                 for keyword in ["unit", "departemen", "bagian"]
@@ -371,7 +396,7 @@ elif menu == "Author":
   st.markdown("---")
 
   st.info(
-      " **Aplikasi Absensi Karyawan Sederhana** ini dikembangkan secara mandiri"
+      "Aplikasi **Aplikasi Absensi Karyawan** ini dikembangkan secara mandiri"
       " untuk memudahkan proses pengecekan rekapitulasi absensi."
   )
 
